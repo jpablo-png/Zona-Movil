@@ -147,3 +147,7 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+# BASE DE DATOS SQLITE
+zona-movil.db
+zona-movil.db-shm
+zona-movil.db-wal
