@@ -4,9 +4,10 @@
   "description": "empresa de ventas de dispositivos electrónicos",
   "main": "index.js",
   "scripts": {
-    "dev": "vite",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "dev": "vite",
+  "start": "node server.js",
+  "test": "echo \"Error: no test specified\" && exit 1"
+},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/jpablo-png/Zona-Movil.git"

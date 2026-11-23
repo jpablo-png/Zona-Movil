@@ -4,7 +4,7 @@ const path = require("path");
 const session = require("express-session");
 const db = require("./database");
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(session({
@@ -87,7 +87,106 @@ app.get("/api/products", (req, res) => {
 
     res.json(products);
 });
+// CONSULTAR PEDIDOS (SOLO ADMINISTRADOR)
+app.get("/api/orders", requireAdmin, (req, res) => {
+    const orders = db.prepare(`
+        SELECT * FROM orders
+        ORDER BY id DESC
+    `).all();
 
+    res.json(orders);
+});
+// REGISTRAR PEDIDOS
+app.post("/api/orders", (req, res) => {
+    const { customer_name, phone, address, items } = req.body;
+
+    if (
+        typeof customer_name !== "string" ||
+        !customer_name.trim() ||
+        typeof phone !== "string" ||
+        !phone.trim() ||
+        typeof address !== "string" ||
+        !address.trim() ||
+        !Array.isArray(items) ||
+        items.length === 0
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: "Datos del pedido inválidos."
+        });
+    }
+
+    try {
+        const createOrder = db.transaction(() => {
+            let total = 0;
+
+            const validItems = items.map(item => {
+                const product = db.prepare(
+                    "SELECT id, name, price FROM products WHERE id = ?"
+                ).get(Number(item.product_id));
+
+                const quantity = Number(item.quantity);
+
+                if (
+                    !product ||
+                    !Number.isInteger(quantity) ||
+                    quantity < 1
+                ) {
+                    throw new Error("Producto o cantidad inválidos.");
+                }
+
+                total += product.price * quantity;
+
+                return {
+                    name: product.name,
+                    price: product.price,
+                    quantity
+                };
+            });
+
+            const order = db.prepare(`
+                INSERT INTO orders (customer_name, phone, address, total)
+                VALUES (?, ?, ?, ?)
+            `).run(
+                customer_name.trim(),
+                phone.trim(),
+                address.trim(),
+                total
+            );
+
+            const insertItem = db.prepare(`
+                INSERT INTO order_items
+                (order_id, product_name, quantity, price)
+                VALUES (?, ?, ?, ?)
+            `);
+
+            validItems.forEach(item => {
+                insertItem.run(
+                    order.lastInsertRowid,
+                    item.name,
+                    item.quantity,
+                    item.price
+                );
+            });
+
+            return order.lastInsertRowid;
+        });
+
+        const orderId = createOrder();
+
+        res.status(201).json({
+            success: true,
+            orderId,
+            message: "Pedido registrado correctamente."
+        });
+
+    } catch (error) {
+        res.status(400).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
 // AGREGAR PRODUCTO (SOLO ADMINISTRADOR)
 app.post("/api/products", requireAdmin, (req, res) => {
     const { name, price, image } = req.body;
