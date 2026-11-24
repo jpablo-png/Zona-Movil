@@ -628,6 +628,17 @@ const headerCount = document.getElementById('header-cart-count');
 const subtotalElement = sideCart.querySelector('.subtotal-value');
 const totalElement = sideCart.querySelector('.total-value');
 const checkoutButton = document.querySelector('[data-path="carrito"]');
+checkoutButton.addEventListener('click', (event) => {
+    event.preventDefault();
+
+    if (cart.length === 0) {
+        alert('Tu carrito está vacío.');
+        return;
+    }
+
+    renderCheckoutCart();
+    document.getElementById('checkout-section').classList.remove('hidden');
+});
 console.log('Botón de carrito:', checkoutButton);
 document.addEventListener('click', (event) => {
     if (event.target.closest('#back-to-store')) {
@@ -698,21 +709,7 @@ function renderCheckoutCart() {
 
     checkoutTotal.textContent = '$' + total.toLocaleString('es-CO') + ' COP';
 }
-checkoutButton.addEventListener('click', (event) => {
-    event.preventDefault();
 
-    const checkoutSection = document.getElementById('checkout-section');
-
-    renderCheckoutCart();
-
-    sideCart.classList.add('hidden');
-    checkoutSection.classList.remove('hidden');
-
-    checkoutSection.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start'
-    });
-});
 // CONFIRMAR PEDIDO
 document.addEventListener('click', async (event) => {
     if (!event.target.closest('#confirm-order')) return;
@@ -1192,7 +1189,7 @@ if (adminProductList) {
 }
 
 // ACTUALIZAR CANTIDAD DE PRODUCTOS
-totalProducts = 0;
+let totalProducts = 0;
 
 if (adminProductCount) {
     adminProductCount.textContent = totalProducts;
@@ -1457,6 +1454,7 @@ buyButton.className = 'mt-3 rounded-lg bg-primary-container p-3 font-bold text-w
 }
     });
  // RECUPERAR PRODUCTOS DESDE SQLITE
+// RECUPERAR PRODUCTOS DESDE SQLITE
 async function loadProductsFromDatabase() {
     try {
         const response = await fetch('/api/products');
@@ -1466,34 +1464,48 @@ async function loadProductsFromDatabase() {
         }
 
         const products = await response.json();
+
         // CONSERVAR EL BOTÓN DEL CATÁLOGO
-const catalogCTA = Array.from(productGrid.children)
-    .find(card => !card.querySelector('h3'));
+        const catalogCTA = Array.from(productGrid.children)
+            .find(card => !card.querySelector('h3'));
 
-// LIMPIAR LAS TARJETAS ANTIGUAS
-productGrid.innerHTML = '';
+        // LIMPIAR PRODUCTOS ANTERIORES
+        productGrid.innerHTML = '';
 
-        // MOSTRAR PRODUCTOS DE SQLITE
-products.forEach(product => {
-    restoringProduct = product;
+        if (adminProductList) {
+            adminProductList.innerHTML = '';
+        }
 
-    document.getElementById('admin-product-name').value = product.name;
-    document.getElementById('admin-product-price').value = product.price;
-    document.getElementById('admin-product-image').value = product.image || '';
+        // MOSTRAR PRODUCTOS GUARDADOS
+        for (const product of products) {
+            restoringProduct = product;
 
-    adminProductForm.requestSubmit();
+            document.getElementById('admin-product-name').value = product.name;
+            document.getElementById('admin-product-price').value = product.price;
+            document.getElementById('admin-product-image').value = product.image || '';
 
-    restoringProduct = null;
-});
-// RESTAURAR EL BOTÓN DEL CATÁLOGO
-if (catalogCTA) {
-    productGrid.appendChild(catalogCTA);
-}
+            adminProductForm.requestSubmit();
+
+            restoringProduct = null;
+        }
+
+        // RESTAURAR EL BOTÓN DEL CATÁLOGO
+        if (catalogCTA) {
+            productGrid.appendChild(catalogCTA);
+        }
+
+        // ACTUALIZAR CONTADOR
+        totalProducts = products.length;
+
+        if (adminProductCount) {
+            adminProductCount.textContent = totalProducts;
+        }
+
     } catch (error) {
+        restoringProduct = null;
         console.error('Error al cargar los productos:', error);
     }
 }
-
 loadProductsFromDatabase();
 checkAdminSession();
 }

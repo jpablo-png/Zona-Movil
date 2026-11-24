@@ -1,30 +1,31 @@
 
 const express = require("express");
 require("dotenv").config();
+
 const path = require("path");
 const session = require("express-session");
 const bcrypt = require("bcryptjs");
-const { db, initDB } = require("./database");
+const { sqlite, initDB } = require("./database");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
-// CONFIGURACIÓN DEL SERVIDOR
-app.set("trust proxy", 1);
+// CONFIGURACIÓN
+app.use(express.json({ limit: "1mb" }));
 
-app.use(express.json());
-
-app.use(session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-        httpOnly: true,
-        sameSite: "strict",
-        secure: process.env.NODE_ENV === "production",
-        maxAge: 1000 * 60 * 60 * 2
-    }
-}));
+app.use(
+    session({
+        secret: process.env.SESSION_SECRET || "zona-movil-local-secret",
+        resave: false,
+        saveUninitialized: false,
+        cookie: {
+            httpOnly: true,
+            sameSite: "strict",
+            secure: false,
+            maxAge: 1000 * 60 * 60 * 2
+        }
+    })
+);
 
 // PROTEGER RUTAS DEL ADMINISTRADOR
 function requireAdmin(req, res, next) {
@@ -38,21 +39,24 @@ function requireAdmin(req, res, next) {
     next();
 }
 
-// INICIAR SESIÓN DEL ADMINISTRADOR
+// INICIAR SESIÓN
 app.post("/api/login", async (req, res) => {
     try {
-        const { username, password } = req.body;
+        const { username, password } = req.body || {};
 
         if (
+            typeof username !== "string" ||
+            typeof password !== "string" ||
             username !== process.env.ADMIN_USER ||
-            !await bcrypt.compare(
-                password || "",
-                process.env.ADMIN_PASSWORD_HASH || ""
-            )
+            !process.env.ADMIN_PASSWORD_HASH ||
+            !(await bcrypt.compare(
+                password,
+                process.env.ADMIN_PASSWORD_HASH
+            ))
         ) {
             return res.status(401).json({
                 success: false,
-                message: "Usuario o contraseña incorrectos"
+                message: "Usuario o contraseña incorrectos."
             });
         }
 
@@ -60,7 +64,7 @@ app.post("/api/login", async (req, res) => {
             if (err) {
                 return res.status(500).json({
                     success: false,
-                    message: "Error al iniciar sesión"
+                    message: "Error al iniciar sesión."
                 });
             }
 
@@ -70,7 +74,7 @@ app.post("/api/login", async (req, res) => {
         });
 
     } catch (error) {
-        console.error(error);
+        console.error("Error de inicio de sesión:", error);
 
         res.status(500).json({
             success: false,
@@ -79,39 +83,41 @@ app.post("/api/login", async (req, res) => {
     }
 });
 
-// VERIFICAR SESIÓN DEL ADMINISTRADOR
+// VERIFICAR SESIÓN
 app.get("/api/session", (req, res) => {
     res.json({
         isAdmin: req.session.isAdmin === true
     });
 });
 
-// CERRAR SESIÓN DEL ADMINISTRADOR
+// CERRAR SESIÓN
 app.post("/api/logout", (req, res) => {
     req.session.destroy((err) => {
         if (err) {
             return res.status(500).json({
                 success: false,
-                message: "Error al cerrar sesión"
+                message: "Error al cerrar sesión."
             });
         }
 
         res.clearCookie("connect.sid");
+
         res.json({ success: true });
     });
 });
 
 // CONSULTAR PRODUCTOS
-app.get("/api/products", async (req, res) => {
+app.get("/api/products", (req, res) => {
     try {
-        const result = await db.query(
-            "SELECT * FROM products ORDER BY id DESC"
-        );
+        const products = sqlite.prepare(`
+            SELECT * FROM products
+            ORDER BY id DESC
+        `).all();
 
-        res.json(result.rows);
+        res.json(products);
 
     } catch (error) {
-        console.error(error);
+        console.error("Error al consultar productos:", error);
 
         res.status(500).json({
             success: false,
@@ -120,18 +126,18 @@ app.get("/api/products", async (req, res) => {
     }
 });
 
-// CONSULTAR PEDIDOS (SOLO ADMINISTRADOR)
-app.get("/api/orders", requireAdmin, async (req, res) => {
+// CONSULTAR PEDIDOS
+app.get("/api/orders", requireAdmin, (req, res) => {
     try {
-        const result = await db.query(`
+        const orders = sqlite.prepare(`
             SELECT * FROM orders
             ORDER BY id DESC
-        `);
+        `).all();
 
-        res.json(result.rows);
+        res.json(orders);
 
     } catch (error) {
-        console.error(error);
+        console.error("Error al consultar pedidos:", error);
 
         res.status(500).json({
             success: false,
@@ -141,133 +147,140 @@ app.get("/api/orders", requireAdmin, async (req, res) => {
 });
 
 // REGISTRAR PEDIDOS
-app.post("/api/orders", async (req, res) => {
-    const { customer_name, phone, address, items } = req.body;
-
-    if (
-        typeof customer_name !== "string" ||
-        !customer_name.trim() ||
-        typeof phone !== "string" ||
-        !phone.trim() ||
-        typeof address !== "string" ||
-        !address.trim() ||
-        !Array.isArray(items) ||
-        items.length === 0
-    ) {
-        return res.status(400).json({
-            success: false,
-            message: "Datos del pedido inválidos."
-        });
-    }
-
-    let client;
-
+app.post("/api/orders", (req, res) => {
     try {
-        client = await db.connect();
+        const {
+            customer_name,
+            phone,
+            address,
+            items
+        } = req.body || {};
 
-        await client.query("BEGIN");
-
-        let total = 0;
-        const validItems = [];
-
-        for (const item of items) {
-            const productId = Number(item.product_id);
-            const quantity = Number(item.quantity);
-
-            if (
-                !Number.isInteger(productId) ||
-                !Number.isInteger(quantity) ||
-                quantity < 1
-            ) {
-                throw new Error("Producto o cantidad inválidos.");
-            }
-
-            const productResult = await client.query(
-                "SELECT id, name, price FROM products WHERE id = $1",
-                [productId]
-            );
-
-            const product = productResult.rows[0];
-
-            if (!product) {
-                throw new Error("Producto o cantidad inválidos.");
-            }
-
-            const price = Number(product.price);
-
-            total += price * quantity;
-
-            validItems.push({
-                name: product.name,
-                price,
-                quantity
+        if (
+            typeof customer_name !== "string" ||
+            !customer_name.trim() ||
+            typeof phone !== "string" ||
+            !phone.trim() ||
+            typeof address !== "string" ||
+            !address.trim() ||
+            !Array.isArray(items) ||
+            items.length === 0 ||
+            items.length > 100
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Datos del pedido inválidos."
             });
         }
 
-        const orderResult = await client.query(`
-            INSERT INTO orders (customer_name, phone, address, total)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-        `, [
-            customer_name.trim(),
-            phone.trim(),
-            address.trim(),
-            total
-        ]);
+        const insertOrder = sqlite.prepare(`
+            INSERT INTO orders
+            (customer_name, phone, address, total)
+            VALUES (?, ?, ?, ?)
+        `);
 
-        const orderId = orderResult.rows[0].id;
+        const findProduct = sqlite.prepare(`
+            SELECT id, name, price
+            FROM products
+            WHERE id = ?
+        `);
 
-        for (const item of validItems) {
-            await client.query(`
-                INSERT INTO order_items
-                (order_id, product_name, quantity, price)
-                VALUES ($1, $2, $3, $4)
-            `, [
-                orderId,
-                item.name,
-                item.quantity,
-                item.price
-            ]);
-        }
+        const insertItem = sqlite.prepare(`
+            INSERT INTO order_items
+            (order_id, product_name, quantity, price)
+            VALUES (?, ?, ?, ?)
+        `);
 
-        await client.query("COMMIT");
+        const saveOrder = sqlite.transaction(() => {
+            let total = 0;
+            const validItems = [];
+
+            for (const item of items) {
+                const productId = Number(item.product_id);
+                const quantity = Number(item.quantity);
+
+                if (
+                    !Number.isSafeInteger(productId) ||
+                    productId <= 0 ||
+                    !Number.isSafeInteger(quantity) ||
+                    quantity < 1 ||
+                    quantity > 100
+                ) {
+                    throw new Error("Producto o cantidad inválidos.");
+                }
+
+                const product = findProduct.get(productId);
+
+                if (!product) {
+                    throw new Error("Uno de los productos no existe.");
+                }
+
+                const price = Number(product.price);
+
+                total += price * quantity;
+
+                validItems.push({
+                    name: product.name,
+                    price,
+                    quantity
+                });
+            }
+
+            if (!Number.isFinite(total) || total <= 0) {
+                throw new Error("El total del pedido no es válido.");
+            }
+
+            const orderResult = insertOrder.run(
+                customer_name.trim(),
+                phone.trim(),
+                address.trim(),
+                total
+            );
+
+            const orderId = Number(orderResult.lastInsertRowid);
+
+            for (const item of validItems) {
+                insertItem.run(
+                    orderId,
+                    item.name,
+                    item.quantity,
+                    item.price
+                );
+            }
+
+            return { orderId, total };
+        });
+
+        const result = saveOrder();
 
         res.status(201).json({
             success: true,
-            orderId,
+            orderId: result.orderId,
             message: "Pedido registrado correctamente."
         });
 
     } catch (error) {
-        if (client) {
-            await client.query("ROLLBACK");
-        }
-
-        console.error(error);
+        console.error("Error al registrar pedido:", error);
 
         res.status(400).json({
             success: false,
-            message: error.message
+            message: error.message || "No se pudo registrar el pedido."
         });
-
-    } finally {
-        if (client) {
-            client.release();
-        }
     }
 });
 
-// AGREGAR PRODUCTO (SOLO ADMINISTRADOR)
-app.post("/api/products", requireAdmin, async (req, res) => {
+// AGREGAR PRODUCTO
+app.post("/api/products", requireAdmin, (req, res) => {
     try {
-        const { name, price, image } = req.body;
+        const { name, price, image } = req.body || {};
         const productPrice = Number(price);
 
         if (
             typeof name !== "string" ||
             !name.trim() ||
             !Number.isFinite(productPrice) ||
-            productPrice <= 0
+            productPrice <= 0 ||
+            (image !== undefined && typeof image !== "string")
         ) {
             return res.status(400).json({
                 success: false,
@@ -275,23 +288,22 @@ app.post("/api/products", requireAdmin, async (req, res) => {
             });
         }
 
-        const result = await db.query(`
+        const result = sqlite.prepare(`
             INSERT INTO products (name, price, image)
-            VALUES ($1, $2, $3)
-            RETURNING id
-        `, [
+            VALUES (?, ?, ?)
+        `).run(
             name.trim(),
             productPrice,
             image || ""
-        ]);
+        );
 
         res.status(201).json({
             success: true,
-            id: result.rows[0].id
+            id: Number(result.lastInsertRowid)
         });
 
     } catch (error) {
-        console.error(error);
+        console.error("Error al agregar producto:", error);
 
         res.status(500).json({
             success: false,
@@ -300,19 +312,21 @@ app.post("/api/products", requireAdmin, async (req, res) => {
     }
 });
 
-// EDITAR PRODUCTO (SOLO ADMINISTRADOR)
-app.put("/api/products/:id", requireAdmin, async (req, res) => {
+// EDITAR PRODUCTO
+app.put("/api/products/:id", requireAdmin, (req, res) => {
     try {
-        const { name, price, image } = req.body;
         const id = Number(req.params.id);
+        const { name, price, image } = req.body || {};
         const productPrice = Number(price);
 
         if (
-            !Number.isInteger(id) ||
+            !Number.isSafeInteger(id) ||
+            id <= 0 ||
             typeof name !== "string" ||
             !name.trim() ||
             !Number.isFinite(productPrice) ||
-            productPrice <= 0
+            productPrice <= 0 ||
+            (image !== undefined && typeof image !== "string")
         ) {
             return res.status(400).json({
                 success: false,
@@ -320,23 +334,28 @@ app.put("/api/products/:id", requireAdmin, async (req, res) => {
             });
         }
 
-        const result = await db.query(`
+        const result = sqlite.prepare(`
             UPDATE products
-            SET name = $1, price = $2, image = $3
-            WHERE id = $4
-        `, [
+            SET name = ?, price = ?, image = ?
+            WHERE id = ?
+        `).run(
             name.trim(),
             productPrice,
             image || "",
             id
-        ]);
+        );
 
-        res.json({
-            success: result.rowCount > 0
-        });
+        if (result.changes === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Producto no encontrado."
+            });
+        }
+
+        res.json({ success: true });
 
     } catch (error) {
-        console.error(error);
+        console.error("Error al editar producto:", error);
 
         res.status(500).json({
             success: false,
@@ -345,33 +364,38 @@ app.put("/api/products/:id", requireAdmin, async (req, res) => {
     }
 });
 
-// ELIMINAR PRODUCTO (SOLO ADMINISTRADOR)
-app.delete("/api/products/:id", requireAdmin, async (req, res) => {
+// ELIMINAR PRODUCTO
+app.delete("/api/products/:id", requireAdmin, (req, res) => {
     try {
         const id = Number(req.params.id);
 
-        if (!Number.isInteger(id)) {
+        if (!Number.isSafeInteger(id) || id <= 0) {
             return res.status(400).json({
                 success: false,
                 message: "ID inválido."
             });
         }
 
-        const result = await db.query(
-            "DELETE FROM products WHERE id = $1",
-            [id]
-        );
+        const result = sqlite.prepare(`
+            DELETE FROM products
+            WHERE id = ?
+        `).run(id);
 
-        res.json({
-            success: result.rowCount > 0
-        });
+        if (result.changes === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Producto no encontrado."
+            });
+        }
+
+        res.json({ success: true });
 
     } catch (error) {
-        console.error(error);
+        console.error("Error al eliminar producto:", error);
 
         res.status(500).json({
             success: false,
-            message: "Error al eliminar producto."
+            message: "No se pudo eliminar el producto."
         });
     }
 });
@@ -381,13 +405,15 @@ app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "index.html"));
 });
 
-// INICIAR SERVIDOR DESPUÉS DE CONECTAR LA BASE DE DATOS
+// INICIAR SERVIDOR
 async function startServer() {
     try {
-        await initDB();
+        initDB();
 
         app.listen(PORT, () => {
-            console.log(`Servidor funcionando en el puerto ${PORT}`);
+            console.log(
+                `Zona-Movil funcionando en http://localhost:${PORT}`
+            );
         });
 
     } catch (error) {
