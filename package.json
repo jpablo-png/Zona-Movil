@@ -4,10 +4,10 @@
   "description": "empresa de ventas de dispositivos electrónicos",
   "main": "index.js",
   "scripts": {
-  "dev": "vite",
-  "start": "node server.js",
-  "test": "echo \"Error: no test specified\" && exit 1"
-},
+    "dev": "vite",
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/jpablo-png/Zona-Movil.git"
@@ -25,7 +25,8 @@
     "better-sqlite3": "^13.2.0",
     "dotenv": "^18.0.10",
     "express": "^5.3.0",
-    "express-session": "^1.19.0"
+    "express-session": "^1.19.0",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "vite": "^8.3.8"
